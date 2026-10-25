@@ -142,6 +142,10 @@ if [[ -f "$PID_FILE" ]]; then
     pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
         daemon_running=true
+        # A stopped daemon (state T) is alive but never reads the FIFO — resume it
+        if [[ "$(ps -o stat= -p "$pid" 2>/dev/null)" == T* ]]; then
+            kill -CONT "$pid" 2>/dev/null || true
+        fi
     fi
 fi
 
@@ -164,7 +168,12 @@ if [[ "$daemon_running" != "true" ]]; then
             fi
             mkfifo "$FIFO" 2>/dev/null || true
             # Start daemon in background (loads TTS pipeline — takes ~10s on first start)
-            nohup bash "$SCRIPT_DIR/speak-daemon.sh" >/dev/null 2>&1 &
+            # In its own session, so the terminal's job control (Ctrl+Z) can't stop it
+            if command -v setsid >/dev/null 2>&1; then
+                nohup setsid bash "$SCRIPT_DIR/speak-daemon.sh" </dev/null >/dev/null 2>&1 &
+            else
+                nohup perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' bash "$SCRIPT_DIR/speak-daemon.sh" </dev/null >/dev/null 2>&1 &
+            fi
             disown
             # Wait for daemon to open the FIFO (pipeline loading takes time)
             for i in $(seq 1 30); do
